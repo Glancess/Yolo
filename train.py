@@ -6,8 +6,38 @@ import torchvision
 from dataset import YoloDataset
 from model import MymoduleforYolo
 from loss import DetectionLoss
-
+from torchvision.ops import box_iou
 import torch.optim as optim
+
+
+def xywh_to_xyxy(box):
+
+    x = box[:,0]
+    y = box[:,1]
+    w = box[:,2]
+    h = box[:,3]
+
+
+    x1 = x - w / 2
+    y1 = y - h / 2
+
+    x2 = x + w / 2
+    y2 = y + h / 2
+
+
+    return torch.stack(
+        [x1,y1,x2,y2],
+        dim=1
+    )
+
+
+
+
+
+
+
+
+
 
 transform = torchvision.transforms.Compose([
     torchvision.transforms.Resize((512,512)),
@@ -92,6 +122,11 @@ for epoch in range(30):
     mymoudle.eval()
     val_loss_sum = 0
 
+
+    total_iou = 0
+    count = 0
+
+
     with torch.no_grad():
 
         for img, target in ValDataloader:
@@ -99,23 +134,66 @@ for epoch in range(30):
             img = img.to(device)
             target = target.to(device)
 
+
             pred = mymoudle(img)
 
-            loss = criterion(pred, target)
+
+            loss = criterion(
+                pred,
+                target
+            )
 
             val_loss_sum += loss.item()
 
-    avg_val_loss = val_loss_sum / len(ValDataloader)
 
-    print(f"验证集平均Loss：{avg_val_loss:.4f}")
 
-    if avg_val_loss < best_loss:
+            # --------------------
+            # IoU计算
+            # --------------------
 
-        best_loss = avg_val_loss
+            mask = target[:,4] == 1
 
-        torch.save(
-            mymoudle.state_dict(),
-            "/kaggle/working/models/best_motor_detector.pth",
+
+            if mask.sum() > 0:
+
+                pred_bbox = pred[mask,:4]
+
+                target_bbox = target[mask,:4]
+
+
+                pred_xyxy = xywh_to_xyxy(
+                    pred_bbox
+                )
+
+                target_xyxy = xywh_to_xyxy(
+                    target_bbox
+                )
+
+
+                ious = box_iou(
+                    pred_xyxy,
+                    target_xyxy
+                )
+
+
+                iou = torch.diag(ious)
+
+
+                total_iou += iou.sum().item()
+
+                count += len(iou)
+
+
+
+        avg_iou = total_iou / count
+
+        avg_val_loss = val_loss_sum / len(ValDataloader)
+
+
+        print(
+            f"验证集平均Loss：{avg_val_loss:.4f}"
         )
 
-        print("✅ 保存最佳模型")
+        print(
+            f"验证集平均IoU：{avg_iou:.4f}"
+        )

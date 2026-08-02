@@ -55,7 +55,9 @@ with torch.no_grad():
 
     bbox = torch.sigmoid(pred[:,:4])
 
-
+    pred_box = xywh_to_xyxy(
+    bbox[0]
+)
     # -----------------------
     # confidence
     # -----------------------
