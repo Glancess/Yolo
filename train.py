@@ -6,6 +6,7 @@ import torchvision
 from dataset import YoloDataset
 from model import MymoduleforYolo
 from loss import DetectionLoss
+from torchvision.ops import generalized_box_iou
 from torchvision.ops import box_iou
 import torch.optim as optim
 
@@ -44,7 +45,7 @@ transform = torchvision.transforms.Compose([
     torchvision.transforms.ToTensor()
 ])
 train_dataset=YoloDataset("/kaggle/input/datasets/aleneger/yolo-conf/helmet_yolo_train/images","/kaggle/input/datasets/aleneger/yolo-conf/helmet_yolo_train/labels" ,transform,None)
-MotorDataloader=DataLoader(train_dataset,batch_size=32,drop_last=True,shuffle=True)
+MotorDataloader=DataLoader(train_dataset,batch_size=32,drop_last=False,shuffle=True)
 
 val_dataset = YoloDataset(
 
@@ -119,13 +120,26 @@ for epoch in range(30):
 
 
     print(f"--------开始第 {epoch} 轮验证----------")
+
+    best_iou=-1
+
     mymoudle.eval()
     val_loss_sum = 0
-
-
     total_iou = 0
     count = 0
 
+    pos_conf_sum = 0
+    neg_conf_sum = 0
+    pos_count = 0
+    neg_count = 0
+
+
+    pos_correct = 0
+    neg_correct = 0
+    pos_total = 0
+    neg_total = 0
+
+    iou50_success=0
 
     with torch.no_grad():
 
@@ -133,11 +147,7 @@ for epoch in range(30):
 
             img = img.to(device)
             target = target.to(device)
-
-
             pred = mymoudle(img)
-
-
             loss = criterion(
                 pred,
                 target
@@ -146,9 +156,59 @@ for epoch in range(30):
             val_loss_sum += loss.item()
 
 
+            conf = torch.sigmoid(pred[:,4])#将预测转换为概率
+
 
             # --------------------
-            # IoU计算
+            # 置信度计算
+            # --------------------
+            target_conf = target[:,4]
+            pos_mask = target_conf == 1
+            if pos_mask.sum()>0:
+                pos_conf_sum += conf[pos_mask].sum().item()
+                pos_count += pos_mask.sum().item()
+
+            neg_mask = target_conf == 0
+
+            if neg_mask.sum()>0:
+
+                neg_conf_sum += conf[neg_mask].sum().item()
+
+                neg_count += neg_mask.sum().item()
+            # --------------------
+            # 置信度计算
+            # --------------------
+
+
+
+
+            # --------------------
+            # 正确率计算
+            # --------------------
+            pred_label = conf > 0.5
+
+            if pos_mask.sum()>0:
+                pos_correct += (
+                    pred_label[pos_mask]
+                ).sum().item()
+
+                pos_total += pos_mask.sum().item()
+
+            if neg_mask.sum()>0:
+
+                neg_correct += (
+                    (~pred_label[neg_mask])
+                ).sum().item()
+
+                neg_total += neg_mask.sum().item()
+            # --------------------
+            # 正确率计算
+            # --------------------
+
+
+            
+            # --------------------
+            # IoU计算（越大越好，重合程度高）
             # --------------------
 
             mask = target[:,4] == 1
@@ -156,8 +216,10 @@ for epoch in range(30):
 
             if mask.sum() > 0:
 
-                pred_bbox = pred[mask,:4]
-
+                pred_bbox = torch.sigmoid(
+                    pred[mask,:4]
+                    )
+            
                 target_bbox = target[mask,:4]
 
 
@@ -178,22 +240,91 @@ for epoch in range(30):
 
                 iou = torch.diag(ious)
 
+                IOU50_mask = iou >= 0.5
+                iou50_success += IOU50_mask.sum().item()
+
 
                 total_iou += iou.sum().item()
-
                 count += len(iou)
+            # --------------------
+            # IoU计算（越大越好，重合程度高）
+            # --------------------
+
+
+
+        # --------------------
+        # 最终统计
+        # --------------------
+
+        if pos_count > 0:
+            avg_pos_conf = pos_conf_sum / pos_count
+            pos_acc = pos_correct / pos_total
+        else:
+            avg_pos_conf = 0
+            pos_acc = 0
+
+
+        if neg_count > 0:
+            avg_neg_conf = neg_conf_sum / neg_count
+            neg_acc = neg_correct / neg_total
+        else:
+            avg_neg_conf = 0
+            neg_acc = 0
 
 
 
         avg_iou = total_iou / count
 
+        if avg_iou > best_iou:
+            best_iou = avg_iou
+            torch.save(
+                mymoudle.state_dict(),
+                "/kaggle/working/models/best_motor_detector.pth"
+            )
+            print(
+                "保存最佳IoU模型"
+            )
+            
         avg_val_loss = val_loss_sum / len(ValDataloader)
 
 
+
+        print("----------------验证结果----------------")
+
+        # 1. 总Loss
         print(
-            f"验证集平均Loss：{avg_val_loss:.4f}"
+            f"Val Loss(GIoU+Confidence): {avg_val_loss:.4f}"
+        )
+
+
+        # 2. BBox定位
+        print(
+            f"Mean IoU: {avg_iou:.4f}"
+        )
+
+
+        # 3. 置信度
+        print(
+            f"Positive Confidence(有目标): {avg_pos_conf:.4f}"
         )
 
         print(
-            f"验证集平均IoU：{avg_iou:.4f}"
+            f"Negative Confidence(无目标): {avg_neg_conf:.4f}"
         )
+
+
+        # 4. 分类准确率
+        print(
+            f"Positive Accuracy(有目标): {pos_acc:.4f}"
+        )
+
+        print(
+            f"Negative Accuracy(无目标): {neg_acc:.4f}"
+        )
+        #5.Iou50的占比
+        iou50_rate = iou50_success / count
+
+        print(
+    f"IoU@0.5成功数量: {iou50_success}/{count}, 成功率: {iou50_rate:.4f}"
+)
+        print("----------------------------------------")
