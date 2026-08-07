@@ -18,8 +18,7 @@ class MymoduleforYolo(nn.Module):
             nn.ReLU(),
             nn.Linear(2048,512),
             nn.ReLU(),
-            nn.Linear(512,5)#加入了Confidence【x，y，w，h， con】//改进因为是单目标检测，去除 类别
-            #是还是不是最后我要求（得到logit算概率）
+            nn.Linear(512,900)#预测框是100个，每个框4+1+4个参数，最后给resize一下即可，成batch*100*9
         )
     def forward(self,x):
         x= self.img_contract(x)
